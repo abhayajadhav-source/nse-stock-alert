@@ -40,10 +40,19 @@ def is_market_hours() -> bool:
 
 
 def get_primary_signal(data: StockData) -> str:
+    """
+    Pick the *strongest* signal for cooldown bookkeeping.
+    Order matters — strongest first, so a stock breaking a 52w high
+    gets a 52w cooldown entry rather than a gap-up one.
+    """
+    if data.is_new_52w_high:  return "new_52w_high"
+    if data.is_new_52w_low:   return "new_52w_low"
     if data.is_gap_up:        return "gap_up"
     if data.is_gap_down:      return "gap_down"
     if data.is_breakout_up:   return "breakout_up"
     if data.is_breakout_down: return "breakout_down"
+    if data.is_near_52w_high: return "near_52w_high"
+    if data.is_near_52w_low:  return "near_52w_low"
     if data.has_volume_spike: return "volume_spike"
     return "none"
 
@@ -60,19 +69,41 @@ def filter_significant_stocks(symbols: List[str]) -> List[StockData]:
             continue
         if data.is_significant:
             significant.append(data)
-            logger.info("✓ %s — gap=%.2f%% intraday=%.2f%% vol=%.1fx",
-                        symbol, data.gap_pct, data.intraday_pct, data.volume_ratio)
+            # Build a richer log line that surfaces 52w events
+            extras = []
+            if data.is_new_52w_high:  extras.append("NEW 52W HIGH")
+            if data.is_new_52w_low:   extras.append("NEW 52W LOW")
+            if data.is_near_52w_high: extras.append(f"near 52w high ({data.pct_from_52w_high:+.2f}%)")
+            if data.is_near_52w_low:  extras.append(f"near 52w low ({data.pct_from_52w_low:+.2f}%)")
+            extra_str = (" | " + " | ".join(extras)) if extras else ""
+            logger.info("✓ %s — gap=%.2f%% intraday=%.2f%% vol=%.1fx%s",
+                        symbol, data.gap_pct, data.intraday_pct,
+                        data.volume_ratio, extra_str)
     return significant
 
 
 def rank_alerts(stocks: List[StockData]) -> List[StockData]:
-    """Most actionable first: gap moves weighted heaviest."""
+    """
+    Most actionable first.
+
+    Scoring rationale:
+      • New 52w highs/lows are the strongest single signal → heaviest weight
+      • Near-52w levels with daily momentum come next
+      • Gap moves and breakouts after that
+      • Volume spike is confirmatory, breaks ties
+    """
     def score(s: StockData) -> float:
-        return (
+        score_val = (
             abs(s.gap_pct)      * 2.0 +
             abs(s.intraday_pct) * 1.5 +
             (s.volume_ratio if s.volume_ratio > 1 else 0) * 0.5
         )
+        # 52w bonuses — these dominate ranking when present
+        if s.is_new_52w_high or s.is_new_52w_low:
+            score_val += 10.0
+        elif s.is_near_52w_high or s.is_near_52w_low:
+            score_val += 3.0
+        return score_val
     return sorted(stocks, key=score, reverse=True)
 
 
@@ -124,12 +155,14 @@ def run_scan_cycle() -> dict:
     cleanup_old_entries()
 
     return {
-        "total_scanned": len(symbols),
-        "significant":   len(significant),
-        "alerts_sent":   sent,
-        "gap_ups":       sum(1 for s, _ in alerts_to_send if s.is_gap_up),
-        "gap_downs":     sum(1 for s, _ in alerts_to_send if s.is_gap_down),
-        "with_news":     sum(1 for _, n in alerts_to_send if n),
+        "total_scanned":  len(symbols),
+        "significant":    len(significant),
+        "alerts_sent":    sent,
+        "gap_ups":        sum(1 for s, _ in alerts_to_send if s.is_gap_up),
+        "gap_downs":      sum(1 for s, _ in alerts_to_send if s.is_gap_down),
+        "new_52w_highs":  sum(1 for s, _ in alerts_to_send if s.is_new_52w_high),
+        "new_52w_lows":   sum(1 for s, _ in alerts_to_send if s.is_new_52w_low),
+        "with_news":      sum(1 for _, n in alerts_to_send if n),
     }
 
 
