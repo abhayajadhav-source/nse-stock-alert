@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.venv/
+venv/
+env/
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Runtime state
+data/alert_state.json
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
