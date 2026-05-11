@@ -18,7 +18,6 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List, Tuple
-from zoneinfo import ZoneInfo
 
 from config import (
     EMAIL_SUBJECT_PREFIX,
@@ -56,6 +55,14 @@ def _stock_card_html(stock: StockData, news_items: List[NewsItem]) -> str:
     # Color the % change red/green
     color = "#16a34a" if change >= 0 else "#dc2626"
 
+    # Highlight border for the strongest signals
+    if stock.is_new_52w_high:
+        border_color = "#16a34a"   # green
+    elif stock.is_new_52w_low:
+        border_color = "#dc2626"   # red
+    else:
+        border_color = "#e5e7eb"   # neutral
+
     news_html = ""
     if news_items:
         items_html = []
@@ -79,7 +86,7 @@ def _stock_card_html(stock: StockData, news_items: List[NewsItem]) -> str:
         )
 
     return f"""
-    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin:10px 0;
+    <div style="border:2px solid {border_color};border-radius:8px;padding:14px;margin:10px 0;
                 background:#ffffff;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;">
         <div style="font-size:16px;font-weight:600;">
@@ -91,6 +98,9 @@ def _stock_card_html(stock: StockData, news_items: List[NewsItem]) -> str:
         </div>
       </div>
       <div style="margin-top:4px;font-size:13px;color:#6b7280;">{_e(tags)}</div>
+      <div style="margin-top:4px;font-size:12px;color:#9ca3af;">
+        52W range: ₹{stock.low_52w:,.2f} — ₹{stock.high_52w:,.2f}
+      </div>
       {news_html}
       <div style="margin-top:10px;font-size:13px;">
         📈
@@ -114,6 +124,7 @@ def _stock_card_text(stock: StockData, news_items: List[NewsItem]) -> str:
         f"{stock.symbol} — {name}",
         f"₹{stock.current_price:,.2f}  ({sign}{change:.2f}%)",
         f"  {tags}",
+        f"  52W range: ₹{stock.low_52w:,.2f} — ₹{stock.high_52w:,.2f}",
     ]
     if news_items:
         lines.append("  News:")
@@ -171,16 +182,20 @@ def send_batch_alert(alerts: List[Tuple[StockData, List[NewsItem]]]) -> bool:
     if not alerts:
         return True
 
-    now    = datetime.now(IST).strftime("%H:%M IST · %d %b %Y")
-    count  = len(alerts)
+    now   = datetime.now(IST).strftime("%H:%M IST · %d %b %Y")
+    count = len(alerts)
 
     # Quick stats for the email header
-    gap_ups   = sum(1 for s, _ in alerts if s.is_gap_up)
-    gap_downs = sum(1 for s, _ in alerts if s.is_gap_down)
+    gap_ups       = sum(1 for s, _ in alerts if s.is_gap_up)
+    gap_downs     = sum(1 for s, _ in alerts if s.is_gap_down)
+    new_52w_highs = sum(1 for s, _ in alerts if s.is_new_52w_high)
+    new_52w_lows  = sum(1 for s, _ in alerts if s.is_new_52w_low)
 
     summary_lines = [f"{count} stock(s) flagged"]
-    if gap_ups:   summary_lines.append(f"{gap_ups} gap up")
-    if gap_downs: summary_lines.append(f"{gap_downs} gap down")
+    if new_52w_highs: summary_lines.append(f"{new_52w_highs} new 52W high")
+    if new_52w_lows:  summary_lines.append(f"{new_52w_lows} new 52W low")
+    if gap_ups:       summary_lines.append(f"{gap_ups} gap up")
+    if gap_downs:     summary_lines.append(f"{gap_downs} gap down")
     summary = " · ".join(summary_lines)
 
     # Build HTML body
@@ -212,7 +227,7 @@ def send_batch_alert(alerts: List[Tuple[StockData, List[NewsItem]]]) -> bool:
         + "\nAutomated alert · Not investment advice\n"
     )
 
-    subject = f"{EMAIL_SUBJECT_PREFIX} {count} stock(s) flagged · {summary}"
+    subject = f"{EMAIL_SUBJECT_PREFIX} {summary}"
     return _send_email(subject, html_body, text_body)
 
 
@@ -241,8 +256,17 @@ def send_test_email() -> bool:
       <h2>✅ NSE Stock Alert System — Test</h2>
       <p>Your Gmail credentials are configured correctly.
          You'll receive alerts here during NSE market hours.</p>
+      <p style="color:#6b7280;font-size:13px;">
+        Signals detected: Gap up/down · Intraday breakouts · Volume spikes ·
+        52-week highs/lows (new and near) · News-driven moves
+      </p>
     </body></html>
     """
-    text_body = "NSE Stock Alert System — Test\nGmail credentials working correctly."
+    text_body = (
+        "NSE Stock Alert System — Test\n"
+        "Gmail credentials working correctly.\n"
+        "Signals: gap up/down, breakouts, volume spikes, "
+        "52-week highs/lows, news-driven moves."
+    )
     return _send_email(f"{EMAIL_SUBJECT_PREFIX} Test message",
                        html_body, text_body)
